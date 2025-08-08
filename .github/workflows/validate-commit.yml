@@ -1,55 +1,52 @@
-name: Cleanup Invalid Files
+name: Enforce Submission Rules
 
 on:
-  workflow_dispatch:  # allows manual trigger
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
 jobs:
-  cleanup:
+  validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
+          fetch-depth: 2  # Needed to compare to previous commit
 
-      - name: Find and delete invalid .py files
+      - name: Get list of changed files with status
+        id: file_status
         run: |
-          echo "🔍 Looking for invalid Python filenames..."
+          git diff --name-status HEAD^ HEAD > changed_files.txt
+          cat changed_files.txt
 
-          VALID_REGEX="^[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
-          INVALID_FILES=$(find . -type f -name "*.py" | while read file; do
-            filename=$(basename "$file")
-            if [[ ! "$filename" =~ $VALID_REGEX ]]; then
-              echo "$file"
-            fi
-          done)
-
-          if [ -z "$INVALID_FILES" ]; then
-            echo "✅ No invalid files found."
-            exit 0
+      - name: Check that only one file was added or modified
+        run: |
+          # Count number of added or modified files
+          ADDED_OR_MODIFIED=$(grep -E '^[AM]' changed_files.txt | wc -l)
+          if [ "$ADDED_OR_MODIFIED" -ne 1 ]; then
+            echo "❌ Error: Only one added or modified file per commit is allowed."
+            exit 1
           fi
 
-          echo "❌ Deleting the following invalid files:"
-          echo "$INVALID_FILES"
-
-          echo "$INVALID_FILES" | xargs rm -f
-
-      - name: Commit and push deletions
+      - name: Prevent file deletions
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          DELETED=$(grep '^D' changed_files.txt | wc -l)
+          if [ "$DELETED" -ne 0 ]; then
+            echo "❌ Error: Deleting existing files is not allowed."
+            exit 1
+          fi
 
-          git add -u
-          if git diff --cached --quiet; then
-            echo "🟢 No changes to commit."
-          else
-            git commit -m "Remove invalid Python files (auto-cleanup)"
-            git push origin HEAD
-            echo "✅ Invalid files removed and changes pushed."
+      - name: Validate filename format
+        run: |
+          FILE=$(grep -E '^[AM]' changed_files.txt | cut -f2)
+          REGEX="^[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
+          if [[ ! "$FILE" =~ $REGEX ]]; then
+            echo "❌ Error: File name '$FILE' does not match the required 'name_lastname.py' format."
+            echo "✅ Allowed characters: letters, apostrophes, hyphens, and accents."
+            exit 1
           fi
 
