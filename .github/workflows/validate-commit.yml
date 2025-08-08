@@ -1,0 +1,41 @@
+name: Validate Commits
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2  # Needed to see the last commit
+
+      - name: Get list of changed files
+        id: changed_files
+        run: |
+          git diff --name-only HEAD^ HEAD > changed_files.txt
+          cat changed_files.txt
+
+      - name: Validate only one file changed
+        run: |
+          FILE_COUNT=$(wc -l < changed_files.txt)
+          if [ "$FILE_COUNT" -ne 1 ]; then
+            echo "Error: Only one file is allowed per commit."
+            exit 1
+          fi
+
+      - name: Validate filename format
+        run: |
+          FILE=$(cat changed_files.txt)
+          if [[ ! "$FILE" =~ ^[a-zA-Z]+_[a-zA-Z]+\.py$ ]]; then
+            echo "Error: File name '$FILE' does not match 'student_name_lastname.py' format."
+            exit 1
+          fi
+
