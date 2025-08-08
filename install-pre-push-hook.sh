@@ -2,7 +2,7 @@
 
 HOOK_PATH=".git/hooks/pre-push"
 
-echo "🛠️ Installing pre-push hook..."
+echo "🛠️  Installing pre-push hook..."
 
 # Ensure this is a Git repo
 if [ ! -d ".git" ]; then
@@ -22,19 +22,28 @@ echo "🔍 Validating Python filenames before push..."
 VALID_REGEX="^student_[a-zA-Z]+_[a-zA-Z]+\.py$"
 EXIT=0
 
-# Get all staged .py files
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$')
-
-for file in $STAGED_FILES; do
-  filename=$(basename "$file")
-
-  if [[ ! "$filename" =~ $VALID_REGEX ]]; then
-    echo "❌ Invalid filename: $file"
-    echo "   🧪 Expected format: student_name_lastname.py"
-    EXIT=1
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # When pushing a new branch, remote_sha is all 0s
+  if [[ "$remote_sha" =~ ^0+$ ]]; then
+    commit_range="$local_sha"
   else
-    echo "✅ Valid: $file"
+    commit_range="$remote_sha..$local_sha"
   fi
+
+  # Get list of added or modified .py files in the commit range
+  FILES=$(git diff --name-only --diff-filter=AM "$commit_range" | grep '\.py$')
+
+  for file in $FILES; do
+    filename=$(basename "$file")
+
+    if [[ ! "$filename" =~ $VALID_REGEX ]]; then
+      echo "❌ Invalid filename: $file"
+      echo "   🧪 Expected format: student_name_lastname.py"
+      EXIT=1
+    else
+      echo "✅ Valid: $file"
+    fi
+  done
 done
 
 if [[ $EXIT -ne 0 ]]; then
@@ -50,4 +59,6 @@ EOF
 chmod +x "$HOOK_PATH"
 
 echo "✅ Pre-push hook installed successfully at $HOOK_PATH"
+
+
 
