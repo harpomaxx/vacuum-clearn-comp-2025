@@ -33,9 +33,12 @@ jobs:
 
       - name: Validate filename format
         run: |
-          FILE=$(cat changed_files.txt)
-          if [[ ! "$FILE" =~ ^[a-zA-Z]+_[a-zA-Z]+\.py$ ]]; then
-            echo "Error: File name '$FILE' does not match 'student_name_lastname.py' format."
+          FILE=$(grep -E '^[AM]' changed_files.txt | cut -f2)
+          REGEX="^[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
+          if [[ ! "$FILE" =~ $REGEX ]]; then
+            echo "❌ Error: File name '$FILE' does not match the required 'name_lastname.py' format."
+            echo "✅ Allowed characters: letters, apostrophes, hyphens, and accents."
             exit 1
           fi
+
 
