@@ -17,11 +17,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Find and delete files that don’t match name_lastname.py
+      - name: Find and delete files not matching student_name_lastname.py
         run: |
           echo "🔍 Scanning all files except .github/, .git/, and whitelisted files..."
 
-          VALID_REGEX="^[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
+          # Strict regex for 'student_<name>_<lastname>.py'
+          VALID_REGEX="^student_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
           WHITELIST=("README.md" "LICENSE" ".gitignore" ".gitattributes")
 
           INVALID_FILES=()
@@ -39,7 +40,10 @@ jobs:
               continue
             fi
 
-            if [[ ! "$filename" =~ $VALID_REGEX ]]; then
+            # Count underscores in filename
+            UNDERSCORE_COUNT=$(grep -o "_" <<< "$filename" | wc -l)
+
+            if [[ ! "$filename" =~ $VALID_REGEX ]] || [[ "$UNDERSCORE_COUNT" -ne 2 ]]; then
               echo "❌ Invalid: $relpath"
               INVALID_FILES+=("$relpath")
             else
