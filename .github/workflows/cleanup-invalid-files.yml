@@ -1,0 +1,54 @@
+name: Cleanup Invalid Files
+
+on:
+  workflow_dispatch:  # allows manual trigger
+  push:
+    branches:
+      - main
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Find and delete invalid .py files
+        run: |
+          echo "🔍 Looking for invalid Python filenames..."
+
+          VALID_REGEX="^[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
+          INVALID_FILES=$(find . -type f -name "*.py" | while read file; do
+            filename=$(basename "$file")
+            if [[ ! "$filename" =~ $VALID_REGEX ]]; then
+              echo "$file"
+            fi
+          done)
+
+          if [ -z "$INVALID_FILES" ]; then
+            echo "✅ No invalid files found."
+            exit 0
+          fi
+
+          echo "❌ Deleting the following invalid files:"
+          echo "$INVALID_FILES"
+
+          echo "$INVALID_FILES" | xargs rm -f
+
+      - name: Commit and push deletions
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add -u
+          if git diff --cached --quiet; then
+            echo "🟢 No changes to commit."
+          else
+            git commit -m "Remove invalid Python files (auto-cleanup)"
+            git push origin HEAD
+            echo "✅ Invalid files removed and changes pushed."
+          fi
