@@ -50,3 +50,4 @@ EOF
 chmod +x "$HOOK_PATH"
 
 echo "✅ Pre-push hook installed successfully at $HOOK_PATH"
+
