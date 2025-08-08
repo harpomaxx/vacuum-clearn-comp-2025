@@ -23,7 +23,7 @@ jobs:
 
           # Strict regex for 'student_<name>_<lastname>.py'
           VALID_REGEX="^student_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
-          WHITELIST=("README.md" "LICENSE" ".gitignore" ".gitattributes")
+          WHITELIST=("README.md" "LICENSE" ".gitignore" ".gitattributes" "install-pre-push-hook.sh")
 
           INVALID_FILES=()
 
