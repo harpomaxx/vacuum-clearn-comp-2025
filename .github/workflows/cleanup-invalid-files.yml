@@ -1,7 +1,7 @@
 name: Cleanup Invalid Files
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -17,23 +17,32 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Delete files that don't match required format
+      - name: Find invalid Python files and delete them
         run: |
-          echo "🔍 Cleaning up files..."
+          echo "🔍 Scanning Python files..."
 
-          VALID_REGEX="^student[-a-zA-Z]+[-][a-zA-Z]+\.py$"
+          VALID_REGEX="^[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
 
-          for file in $(find . -type f); do
-            basename=$(basename "$file")
-            # Skip README.md
-            if [[ "$basename" == "README.md" ]]; then
-              continue
+          INVALID_FILES=()
+
+          while IFS= read -r file; do
+            filename=$(basename "$file")
+            if [[ ! "$filename" =~ $VALID_REGEX ]]; then
+              echo "❌ Invalid: $file"
+              INVALID_FILES+=("$file")
+            else
+              echo "✅ Valid: $file"
             fi
-            # Skip valid Python files
-            if [[ "$basename" =~ $VALID_REGEX ]]; then
-              continue
-            fi
-            echo "❌ Deleting $file"
+          done < <(find . -type f -name "*.py")
+
+          # Delete invalid files
+          if [ "${#INVALID_FILES[@]}" -eq 0 ]; then
+            echo "✅ No invalid Python files found."
+            exit 0
+          fi
+
+          echo "🗑️ Deleting ${#INVALID_FILES[@]} invalid file(s)..."
+          for file in "${INVALID_FILES[@]}"; do
             rm -f "$file"
           done
 
@@ -46,8 +55,9 @@ jobs:
           if git diff --cached --quiet; then
             echo "🟢 No changes to commit."
           else
-            git commit -m "Clean up invalid files (keep only student<name>-<lastname>.py and README.md)"
+            git commit -m "Removed invalid Python files (auto-cleanup)"
             git push origin HEAD
-            echo "✅ Cleanup complete."
+            echo "✅ Deletions committed and pushed."
           fi
+
 
