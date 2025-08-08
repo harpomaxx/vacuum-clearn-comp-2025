@@ -1,7 +1,7 @@
 name: Cleanup Invalid Files
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # allows manual trigger
   push:
     branches:
       - main
@@ -17,27 +17,38 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Find invalid Python files and delete them
+      - name: Find and delete files that don’t match name_lastname.py
         run: |
-          echo "🔍 Scanning Python files..."
+          echo "🔍 Scanning all files except .github/, .git/, and whitelisted files..."
 
           VALID_REGEX="^[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
+          WHITELIST=("README.md" "LICENSE" ".gitignore" ".gitattributes")
 
           INVALID_FILES=()
 
           while IFS= read -r file; do
             filename=$(basename "$file")
-            if [[ ! "$filename" =~ $VALID_REGEX ]]; then
-              echo "❌ Invalid: $file"
-              INVALID_FILES+=("$file")
-            else
-              echo "✅ Valid: $file"
-            fi
-          done < <(find . -type f -name "*.py")
+            relpath="${file#./}"
 
-          # Delete invalid files
+            # Skip whitelisted files and .github/.git folders
+            if [[ "$relpath" =~ ^\.github/ ]] || [[ "$relpath" =~ ^\.git/ ]]; then
+              continue
+            fi
+
+            if [[ " ${WHITELIST[*]} " =~ " $relpath " ]]; then
+              continue
+            fi
+
+            if [[ ! "$filename" =~ $VALID_REGEX ]]; then
+              echo "❌ Invalid: $relpath"
+              INVALID_FILES+=("$relpath")
+            else
+              echo "✅ Valid: $relpath"
+            fi
+          done < <(find . -type f)
+
           if [ "${#INVALID_FILES[@]}" -eq 0 ]; then
-            echo "✅ No invalid Python files found."
+            echo "✅ No invalid files found."
             exit 0
           fi
 
@@ -55,9 +66,8 @@ jobs:
           if git diff --cached --quiet; then
             echo "🟢 No changes to commit."
           else
-            git commit -m "Removed invalid Python files (auto-cleanup)"
+            git commit -m "Remove invalid files (auto-cleanup)"
             git push origin HEAD
-            echo "✅ Deletions committed and pushed."
+            echo "✅ Invalid files removed and changes pushed."
           fi
-
 
