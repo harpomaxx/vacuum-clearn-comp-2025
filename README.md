@@ -9,19 +9,20 @@ Welcome to the assignment repository! Please follow these instructions carefully
 You must submit **exactly one Python file** that follows this naming format:
 
 ```
-student_<name>_<lastname>.py
+student_<name>_<lastname>_agent.py
 ```
 
 ### Examples of valid filenames:
 
-- `student_john_doe.py`
-- `student_ana_garcia.py`
+- `student_john_doe_agent.py`
+- `student_ana_garcia_agent.py`
 
 ### ❌ Invalid examples (will be rejected):
 
-- `john_doe.py` (missing 'student\_')
-- `student_john.py` (missing lastname)
-- `student_john_doe_extra.py` (too many parts)
+- `john_doe_agent.py` (missing 'student\_')- 
+- `student_ohn_doe.py` (missing '\_agent')
+- `student_john_agent.py` (missing lastname)
+- `student_john_doe_extra_agent.py` (too many parts)
 - `assignment.py` (wrong format)
 - `caca.py` (unacceptable name)
 
