@@ -17,45 +17,45 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Find and delete files not matching student_name_lastname.py
+      - name: Find and delete files not matching student_name_lastname_agent.py
         run: |
           echo "🔍 Scanning all files except .github/, .git/, and whitelisted files..."
-
-          # Strict regex for 'student_<name>_<lastname>.py'
-          VALID_REGEX="^student_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+\.py$"
+      
+          # Strict regex for 'student_<name>_<lastname>_agent.py'
+          VALID_REGEX="^student_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_[-a-zA-Z'éèáàíìóòúùäöüñçÉÈÁÀÍÌÓÒÚÙÄÖÜÑÇ]+_agent\.py$"
           WHITELIST=("README.md" "LICENSE" ".gitignore" ".gitattributes" "install-pre-push-hook.sh")
-
+      
           INVALID_FILES=()
-
+      
           while IFS= read -r file; do
             filename=$(basename "$file")
             relpath="${file#./}"
-
+      
             # Skip whitelisted files and .github/.git folders
             if [[ "$relpath" =~ ^\.github/ ]] || [[ "$relpath" =~ ^\.git/ ]]; then
               continue
             fi
-
+      
             if [[ " ${WHITELIST[*]} " =~ " $relpath " ]]; then
               continue
             fi
-
+      
             # Count underscores in filename
             UNDERSCORE_COUNT=$(grep -o "_" <<< "$filename" | wc -l)
-
-            if [[ ! "$filename" =~ $VALID_REGEX ]] || [[ "$UNDERSCORE_COUNT" -ne 2 ]]; then
+      
+            if [[ ! "$filename" =~ $VALID_REGEX ]] || [[ "$UNDERSCORE_COUNT" -ne 3 ]]; then
               echo "❌ Invalid: $relpath"
               INVALID_FILES+=("$relpath")
             else
               echo "✅ Valid: $relpath"
             fi
           done < <(find . -type f)
-
+      
           if [ "${#INVALID_FILES[@]}" -eq 0 ]; then
             echo "✅ No invalid files found."
             exit 0
           fi
-
+      
           echo "🗑️ Deleting ${#INVALID_FILES[@]} invalid file(s)..."
           for file in "${INVALID_FILES[@]}"; do
             rm -f "$file"
