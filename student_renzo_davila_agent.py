@@ -55,15 +55,11 @@ class ExampleAgent(BaseAgent):
         perception = self.get_perception()
         if not perception or perception.get('is_finished', True):
             return False
-        
-        print(self.last_position)
-        print(perception.get('position'))
 
         if perception.get('is_dirty', False):
             return self.suck()
 
         if not self.reach_side and perception.get('position') != self.last_position:
-            print(1)
             self.last_position = perception.get('position')
             return self.left()
         elif not self.reach_side and perception.get('position') == self.last_position:
@@ -72,26 +68,22 @@ class ExampleAgent(BaseAgent):
             return self.down()
 
         if self.reach_side and not self.reach_corner and perception.get('position') != self.last_position:
-            print(2)
             self.last_position = perception.get('position')
             return self.down()
         elif not self.reach_corner and perception.get('position') == self.last_position:
             self.reach_corner = True
-            self.last_position = perception.get('position')
-            return self.right()
+            self.last_position = (0,0)
+            return self.suck()
 
         if self.reach_corner:
 
             if self.change_side and perception.get('position') != self.last_position:
-               print(3)
                self.last_position = perception.get('position')
                return self.right()
             elif not self.change_side and perception.get('position') != self.last_position:
-               print(4)
                self.last_position = perception.get('position')
                return self.left()
             else:
-                print(5)
                 self.change_side = not self.change_side
                 self.last_position = perception.get('position')
                 return self.up()
