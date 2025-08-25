@@ -1,21 +1,17 @@
 import sys
 import os
-from collections import deque
-from typing import List, Optional, Tuple
+import heapq
+from typing import Optional, List, Tuple, Dict, Callable
 
-# Add parent directory to import base_agent from main project
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_agent import BaseAgent
 
 
-class CompetitiveAgent(BaseAgent):
-    """An agent that uses global planning to clean optimally.
+class StudentChatGPTAgent(BaseAgent):
+    """Agent that uses A* to find the nearest dirt when global state is available.
 
-    The agent keeps a full map of the environment (when available) and
-    computes the shortest path to the nearest dirty cell using BFS that takes
-    walls/obstacles into account.  If the global state cannot be accessed, it
-    falls back to a serpentine sweep similar to how a human would vacuum a
-    room, ensuring full coverage.
+    If the global state cannot be retrieved, the agent performs a serpentine
+    sweep across the grid as a fallback strategy.
     """
 
     def __init__(
@@ -31,7 +27,7 @@ class CompetitiveAgent(BaseAgent):
     ) -> None:
         super().__init__(
             server_url,
-            "CompetitiveAgent",
+            "StudentChatGPTAgent",
             enable_ui,
             record_game,
             replay_file,
@@ -40,110 +36,141 @@ class CompetitiveAgent(BaseAgent):
             auto_exit_on_finish,
             live_stats,
         )
+        self.current_path: List[Callable[[], bool]] = []
+        self.use_global: bool = True
+        self.direction: str = "right"
 
-        self._planned_path: List[str] = []
-        self._use_global: bool = True
-        self._direction: str = "right"  # used in serpentine fallback
-
-    # ------------------------------------------------------------------
-    def get_strategy_description(self) -> str:  # pragma: no cover - simple string
+    def get_strategy_description(self) -> str:
         return (
-            "BFS global planner that always moves along the shortest path to the"
-            " nearest dirt. Falls back to a serpentine sweep if global state is"
-            " unavailable."
+            "Plans paths to the nearest dirt using A* search over the global grid. "
+            "If the global state cannot be accessed, falls back to a serpentine sweep"
+            " of the environment."
         )
 
     # ------------------------------------------------------------------
-    def _bfs_to_nearest_dirt(
-        self, start: Tuple[int, int], grid: List[List[int]]
-    ) -> List[str]:
-        """Return list of actions to reach the closest dirty cell.
+    def _a_star_to_nearest_dirt(self) -> Optional[List[Callable[[], bool]]]:
+        """Return a sequence of actions to the closest dirt using A* search.
 
-        Obstacles are considered impassable if the grid contains -1 or None.
-        The returned list contains strings representing movement methods
-        ('up', 'down', 'left', 'right').  An empty list means no dirt found.
+        Returns None if the global state is unavailable. Returns an empty list if
+        there is no dirt left in the grid.
         """
+        try:
+            state = self.get_environment_state()
+        except Exception:
+            return None
+        if not state:
+            return None
 
-        h = len(grid)
-        w = len(grid[0]) if h else 0
-        visited = set([start])
-        queue = deque([(start, [])])
-        while queue:
-            (x, y), path = queue.popleft()
-            # Check if current cell has dirt
-            if grid[y][x] in (1, "1"):
-                return path
-            for dx, dy, action in (
-                (0, -1, "up"),
-                (0, 1, "down"),
-                (-1, 0, "left"),
-                (1, 0, "right"),
-            ):
+        grid: List[List[int]] = state.get("grid")
+        start_pos: Tuple[int, int] = state.get("agent_position")
+        if grid is None or start_pos is None:
+            return None
+
+        dirty: List[Tuple[int, int]] = [
+            (x, y)
+            for y, row in enumerate(grid)
+            for x, cell in enumerate(row)
+            if cell == 1
+        ]
+        if not dirty:
+            return []
+
+        width, height = len(grid[0]), len(grid)
+        start = tuple(start_pos)
+
+        def h_cost(pos: Tuple[int, int]) -> int:
+            x, y = pos
+            return min(abs(x - dx) + abs(y - dy) for dx, dy in dirty)
+
+        pq: List[Tuple[int, Tuple[int, int], List[Callable[[], bool]]]] = []
+        heapq.heappush(pq, (h_cost(start), start, []))
+        best_g: Dict[Tuple[int, int], int] = {start: 0}
+        parents: Dict[Tuple[int, int], Tuple[Tuple[int, int], Callable[[], bool]]] = {
+            start: (None, None)
+        }
+
+        moves: List[Tuple[Callable[[], bool], Tuple[int, int]]] = [
+            (self.up, (0, -1)),
+            (self.down, (0, 1)),
+            (self.left, (-1, 0)),
+            (self.right, (1, 0)),
+        ]
+
+        while pq:
+            f_cost, (x, y), path = heapq.heappop(pq)
+            g_cost = len(path)
+            if g_cost > best_g.get((x, y), float("inf")):
+                continue
+
+            if (x, y) in dirty:
+                actions: List[Callable[[], bool]] = []
+                cur = (x, y)
+                while parents[cur][0] is not None:
+                    parent_pos, act = parents[cur]
+                    actions.append(act)
+                    cur = parent_pos
+                actions.reverse()
+                return actions
+
+            for action, (dx, dy) in moves:
                 nx, ny = x + dx, y + dy
-                if 0 <= nx < w and 0 <= ny < h and (nx, ny) not in visited:
-                    cell = grid[ny][nx]
-                    if cell not in (-1, None, "X"):
-                        visited.add((nx, ny))
-                        queue.append(((nx, ny), path + [action]))
+                if not (0 <= nx < width and 0 <= ny < height):
+                    continue
+                new_g = g_cost + 1
+                if new_g >= best_g.get((nx, ny), float("inf")):
+                    continue
+                best_g[(nx, ny)] = new_g
+                parents[(nx, ny)] = ((x, y), action)
+                new_path = path + [action]
+                heapq.heappush(
+                    pq,
+                    (new_g + h_cost((nx, ny)), (nx, ny), new_path),
+                )
         return []
 
     # ------------------------------------------------------------------
     def _serpentine_step(self) -> bool:
-        """Perform one step of a serpentine sweep pattern."""
-        if self._direction == "right":
-            move_horizontal = self.right
-            reverse = "left"
-        else:
-            move_horizontal = self.left
-            reverse = "right"
-
-        if move_horizontal():
+        if self.direction == "right":
+            if self.right():
+                return True
+            if self.down():
+                self.direction = "left"
+                return True
+            return self.idle()
+        if self.left():
             return True
         if self.down():
-            self._direction = reverse
+            self.direction = "right"
             return True
         return self.idle()
 
     # ------------------------------------------------------------------
     def think(self) -> bool:
-        """Main decision loop executed at each time step."""
         if not self.is_connected():
             return False
 
         perception = self.get_perception()
-        if not perception or perception.get("is_finished", False):
+        if not perception or perception.get("is_finished", True):
             return False
 
         if perception.get("is_dirty", False):
-            self._planned_path.clear()
             return self.suck()
 
-        # Follow planned path if available
-        if self._planned_path:
-            action = self._planned_path.pop(0)
-            return getattr(self, action)()
+        if self.current_path:
+            action = self.current_path.pop(0)
+            return action()
 
-        # Try to use global state to plan a path to the nearest dirt
-        if self._use_global:
-            try:
-                state = self.get_environment_state()
-            except Exception:
-                state = None
-            if state and state.get("grid") and state.get("agent_position"):
-                grid = state["grid"]
-                start = tuple(state["agent_position"])
-                path = self._bfs_to_nearest_dirt(start, grid)
-                if path:
-                    self._planned_path = path
-                    action = self._planned_path.pop(0)
-                    return getattr(self, action)()
-                else:
-                    # No dirt left; remain idle
-                    return self.idle()
+        if self.use_global:
+            path = self._a_star_to_nearest_dirt()
+            if path is None:
+                self.use_global = False
+            elif not path:
+                return self.idle()
             else:
-                self._use_global = False
+                self.current_path = path
+                action = self.current_path.pop(0)
+                return action()
 
-        # Fallback: serpentine sweep
         return self._serpentine_step()
 
 
@@ -155,19 +182,18 @@ def run_agent_simulation(
     server_url: str = "http://localhost:5000",
     verbose: bool = True,
 ) -> int:
-    """Utility to run the agent in a simulation for manual testing."""
-    agent = CompetitiveAgent(server_url, enable_ui=verbose, live_stats=verbose)
+    agent = StudentChatGPTAgent(server_url)
     try:
         if not agent.connect_to_environment(size_x, size_y, dirt_rate):
             return 0
-        return agent.run_simulation(verbose=verbose)
+        performance = agent.run_simulation(verbose)
+        return performance
     finally:
         agent.disconnect()
 
 
 if __name__ == "__main__":
-    print("CompetitiveAgent - BFS Optimal Cleaner")
-    print("Make sure the environment server is running on localhost:5000")
-    print("Strategy: Shortest-path planning using global state with serpentine fallback")
+    print("StudentChatGPTAgent using A* search")
+    print("Ensure the environment server is running on localhost:5000")
     performance = run_agent_simulation(verbose=True)
     print(f"\nFinal performance: {performance}")
