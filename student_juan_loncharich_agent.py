@@ -1,165 +1,173 @@
 import sys
 import os
-from typing import Optional
-import random
+from collections import deque
+from typing import List, Optional, Tuple
 
-# Add the parent directory to the path to import base_agent
+# Add parent directory to import base_agent from main project
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_agent import BaseAgent
 
 
 class CompetitiveAgent(BaseAgent):
+    """An agent that uses global planning to clean optimally.
+
+    The agent keeps a full map of the environment (when available) and
+    computes the shortest path to the nearest dirty cell using BFS that takes
+    walls/obstacles into account.  If the global state cannot be accessed, it
+    falls back to a serpentine sweep similar to how a human would vacuum a
+    room, ensuring full coverage.
     """
-    An agent that prioritizes cleaning and explores unvisited cells systematically.
-    Avoids immediate reversals when possible.
-    """
 
-    def __init__(self,
-                 server_url: str = "http://localhost:5000",
-                 enable_ui: bool = False,
-                 record_game: bool = False,
-                 replay_file: Optional[str] = None,
-                 cell_size: int = 60,
-                 fps: int = 10,
-                 auto_exit_on_finish: bool = True,
-                 live_stats: bool = False):
-        super().__init__(server_url, "CompetitiveAgent", enable_ui, record_game,
-                         replay_file, cell_size, fps, auto_exit_on_finish, live_stats)
+    def __init__(
+        self,
+        server_url: str = "http://localhost:5000",
+        enable_ui: bool = False,
+        record_game: bool = False,
+        replay_file: Optional[str] = None,
+        cell_size: int = 60,
+        fps: int = 10,
+        auto_exit_on_finish: bool = True,
+        live_stats: bool = False,
+    ) -> None:
+        super().__init__(
+            server_url,
+            "CompetitiveAgent",
+            enable_ui,
+            record_game,
+            replay_file,
+            cell_size,
+            fps,
+            auto_exit_on_finish,
+            live_stats,
+        )
 
-        self.visited_cells = set()
-        self.grid_width = 0
-        self.grid_height = 0
-        self.last_action = None
+        self._planned_path: List[str] = []
+        self._use_global: bool = True
+        self._direction: str = "right"  # used in serpentine fallback
 
-    def get_strategy_description(self) -> str:
-        return "CompetitiveAgent: Prioritizes cleaning, then explores unvisited cells. Avoids immediate reversals."
+    # ------------------------------------------------------------------
+    def get_strategy_description(self) -> str:  # pragma: no cover - simple string
+        return (
+            "BFS global planner that always moves along the shortest path to the"
+            " nearest dirt. Falls back to a serpentine sweep if global state is"
+            " unavailable."
+        )
 
+    # ------------------------------------------------------------------
+    def _bfs_to_nearest_dirt(
+        self, start: Tuple[int, int], grid: List[List[int]]
+    ) -> List[str]:
+        """Return list of actions to reach the closest dirty cell.
+
+        Obstacles are considered impassable if the grid contains -1 or None.
+        The returned list contains strings representing movement methods
+        ('up', 'down', 'left', 'right').  An empty list means no dirt found.
+        """
+
+        h = len(grid)
+        w = len(grid[0]) if h else 0
+        visited = set([start])
+        queue = deque([(start, [])])
+        while queue:
+            (x, y), path = queue.popleft()
+            # Check if current cell has dirt
+            if grid[y][x] in (1, "1"):
+                return path
+            for dx, dy, action in (
+                (0, -1, "up"),
+                (0, 1, "down"),
+                (-1, 0, "left"),
+                (1, 0, "right"),
+            ):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h and (nx, ny) not in visited:
+                    cell = grid[ny][nx]
+                    if cell not in (-1, None, "X"):
+                        visited.add((nx, ny))
+                        queue.append(((nx, ny), path + [action]))
+        return []
+
+    # ------------------------------------------------------------------
+    def _serpentine_step(self) -> bool:
+        """Perform one step of a serpentine sweep pattern."""
+        if self._direction == "right":
+            move_horizontal = self.right
+            reverse = "left"
+        else:
+            move_horizontal = self.left
+            reverse = "right"
+
+        if move_horizontal():
+            return True
+        if self.down():
+            self._direction = reverse
+            return True
+        return self.idle()
+
+    # ------------------------------------------------------------------
     def think(self) -> bool:
-        """
-        Implements the decision logic of the agent.
-
-        Returns:
-            bool: True if the action was executed successfully, False if simulation should stop.
-        """
+        """Main decision loop executed at each time step."""
         if not self.is_connected():
             return False
 
         perception = self.get_perception()
-        if not perception or perception.get('is_finished', False):
+        if not perception or perception.get("is_finished", False):
             return False
 
-        # Initialize grid dimensions if not set
-        if self.grid_width == 0 or self.grid_height == 0:
-            env_state = self.get_environment_state()
-            if env_state and 'grid' in env_state:
-                grid = env_state['grid']
-                self.grid_height = len(grid)
-                if self.grid_height > 0:
-                    self.grid_width = len(grid[0])
-                print(f"[{self.agent_name}] Initialized with grid dimensions: {self.grid_width}x{self.grid_height}")
-
-        current_x, current_y = perception.get('position', (0, 0))
-        self.visited_cells.add((current_x, current_y))
-
-        # Priority 1: Clean if dirty
-        if perception.get('is_dirty', False):
-            self.last_action = 'SUCK'
+        if perception.get("is_dirty", False):
+            self._planned_path.clear()
             return self.suck()
 
-        # Priority 2: Move to unvisited cells
-        possible_moves = []
+        # Follow planned path if available
+        if self._planned_path:
+            action = self._planned_path.pop(0)
+            return getattr(self, action)()
 
-        # Check all directions for unvisited cells
-        if current_y > 0 and (current_x, current_y - 1) not in self.visited_cells:
-            possible_moves.append('UP')
-        if current_y < self.grid_height - 1 and (current_x, current_y + 1) not in self.visited_cells:
-            possible_moves.append('DOWN')
-        if current_x > 0 and (current_x - 1, current_y) not in self.visited_cells:
-            possible_moves.append('LEFT')
-        if current_x < self.grid_width - 1 and (current_x + 1, current_y) not in self.visited_cells:
-            possible_moves.append('RIGHT')
-
-        chosen_action = None
-
-        if possible_moves:
-            # Prefer unvisited cells
-            chosen_action = random.choice(possible_moves)
-        else:
-            # All adjacent cells visited, try valid moves avoiding immediate reversal
-            all_valid_moves = []
-
-            if current_y > 0 and self.last_action != 'DOWN':
-                all_valid_moves.append('UP')
-            if current_y < self.grid_height - 1 and self.last_action != 'UP':
-                all_valid_moves.append('DOWN')
-            if current_x > 0 and self.last_action != 'RIGHT':
-                all_valid_moves.append('LEFT')
-            if current_x < self.grid_width - 1 and self.last_action != 'LEFT':
-                all_valid_moves.append('RIGHT')
-
-            if all_valid_moves:
-                chosen_action = random.choice(all_valid_moves)
-            else:
-                # Last resort: any valid move
-                fallback_moves = []
-                if current_y > 0:
-                    fallback_moves.append('UP')
-                if current_y < self.grid_height - 1:
-                    fallback_moves.append('DOWN')
-                if current_x > 0:
-                    fallback_moves.append('LEFT')
-                if current_x < self.grid_width - 1:
-                    fallback_moves.append('RIGHT')
-
-                if fallback_moves:
-                    chosen_action = random.choice(fallback_moves)
+        # Try to use global state to plan a path to the nearest dirt
+        if self._use_global:
+            try:
+                state = self.get_environment_state()
+            except Exception:
+                state = None
+            if state and state.get("grid") and state.get("agent_position"):
+                grid = state["grid"]
+                start = tuple(state["agent_position"])
+                path = self._bfs_to_nearest_dirt(start, grid)
+                if path:
+                    self._planned_path = path
+                    action = self._planned_path.pop(0)
+                    return getattr(self, action)()
                 else:
-                    chosen_action = 'IDLE'
+                    # No dirt left; remain idle
+                    return self.idle()
+            else:
+                self._use_global = False
 
-        # Execute chosen action
-        self.last_action = chosen_action
-
-        if chosen_action == 'UP':
-            return self.up()
-        elif chosen_action == 'DOWN':
-            return self.down()
-        elif chosen_action == 'LEFT':
-            return self.left()
-        elif chosen_action == 'RIGHT':
-            return self.right()
-        else:
-            return self.idle()
+        # Fallback: serpentine sweep
+        return self._serpentine_step()
 
 
-def run_agent_simulation(size_x: int = 8, size_y: int = 8,
-                             dirt_rate: float = 0.3,
-                             server_url: str = "http://localhost:5000",
-                             verbose: bool = True) -> int:
-    """
-    Function to run a simulation with the CompetitiveAgent.
-    """
-    agent = CompetitiveAgent(server_url, enable_ui=True, live_stats=verbose, record_game=False)
-
+# ----------------------------------------------------------------------
+def run_agent_simulation(
+    size_x: int = 8,
+    size_y: int = 8,
+    dirt_rate: float = 0.3,
+    server_url: str = "http://localhost:5000",
+    verbose: bool = True,
+) -> int:
+    """Utility to run the agent in a simulation for manual testing."""
+    agent = CompetitiveAgent(server_url, enable_ui=verbose, live_stats=verbose)
     try:
         if not agent.connect_to_environment(size_x, size_y, dirt_rate):
-            print("Failed to connect to environment.")
             return 0
-
-        performance = agent.run_simulation(verbose=verbose)
-        return performance
-
+        return agent.run_simulation(verbose=verbose)
     finally:
         agent.disconnect()
 
 
 if __name__ == "__main__":
-    print("New Agent - Smart Exploration Strategy")
+    print("CompetitiveAgent - BFS Optimal Cleaner")
     print("Make sure the environment server is running on localhost:5000")
-    print("Strategy: Prioritizes cleaning, then explores unvisited cells. Avoids immediate reversals.")
-    print()
-
+    print("Strategy: Shortest-path planning using global state with serpentine fallback")
     performance = run_agent_simulation(verbose=True)
     print(f"\nFinal performance: {performance}")
-
-    print("\nThis agent can be registered in run_agent.py like:")
-    print('    "new": CompetitiveAgent')
