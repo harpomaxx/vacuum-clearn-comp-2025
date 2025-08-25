@@ -1,271 +1,200 @@
 import sys
 import os
-import heapq
-import random
-from typing import Optional, List, Tuple, Dict, Callable
+from collections import defaultdict, deque
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_agent import BaseAgent
 
-
-class StudentChatGPTAgent(BaseAgent):
-    """Agent that uses a genetic algorithm to plan a cleaning tour.
-
-    The agent retrieves the global state of the environment and models the
-    cleaning task as a Travelling Salesperson Problem (TSP) where each dirt
-    cell must be visited once. A genetic algorithm optimizes the order of
-    visitation, and A* search generates the movement actions between points.
-    If the global state cannot be retrieved the agent falls back to a
-    serpentine sweep across the grid.
+class WallSweepAgent(BaseAgent):
+    """
+    Unknown-size matrix traversal:
+      Phase A: go UP until wall, then LEFT until wall -> reach top-left corner.
+      Phase B: serpentine sweep (RIGHT to wall, DOWN 1, LEFT to wall, DOWN 1, ...).
+    Cleans whenever on dirt. Learns walls when a move fails or position doesn't change.
     """
 
-    def __init__(
-        self,
-        server_url: str = "http://localhost:5000",
-        enable_ui: bool = False,
-        record_game: bool = False,
-        replay_file: Optional[str] = None,
-        cell_size: int = 60,
-        fps: int = 10,
-        auto_exit_on_finish: bool = True,
-        live_stats: bool = False,
-    ) -> None:
-        super().__init__(
-            server_url,
-            "StudentChatGPTAgent",
-            enable_ui,
-            record_game,
-            replay_file,
-            cell_size,
-            fps,
-            auto_exit_on_finish,
-            live_stats,
-        )
-        self.current_path: List[Callable[[], bool]] = []
-        self.use_global: bool = True
-        self.direction: str = "right"
+    def __init__(self, server_url="http://localhost:5000", debug=True, **kwargs):
+        super().__init__(server_url, "WallSweepAgent", **kwargs)
+        self.debug = debug
 
-    # ------------------------------------------------------------------
-    def get_strategy_description(self) -> str:
-        return (
-            "Plans a full cleaning route using a genetic algorithm that solves a TSP "
-            "over the global grid. If the global state is unavailable, performs a "
-            "serpentine sweep as a fallback strategy."
-        )
+        # Movement functions and deltas (x, y) with y increasing downward
+        self.delta_map = {
+            self.up:    (0, -1),
+            self.down:  (0,  1),
+            self.left:  (-1, 0),
+            self.right: (1,  0),
+        }
 
-    # ------------------------------------------------------------------
-    # GA helpers
-    def _ordered_crossover(self, p1: List[int], p2: List[int]) -> List[int]:
-        a, b = sorted(random.sample(range(len(p1)), 2))
-        child = [None] * len(p1)
-        child[a:b] = p1[a:b]
-        pos = b
-        for gene in p2:
-            if gene not in child:
-                if pos >= len(p1):
-                    pos = 0
-                child[pos] = gene
-                pos += 1
-        return child
+        # Memory
+        self.visited = set()
+        self.visit_counts = defaultdict(int)
+        self.blocked = defaultdict(set)   # {(x,y): {move_fn, ...}}
+        self.history = deque(maxlen=10)
 
-    def _mutate(self, tour: List[int]) -> None:
-        i, j = random.sample(range(len(tour)), 2)
-        tour[i], tour[j] = tour[j], tour[i]
+        # Control state
+        self.mode = "go_top"  # go_top -> go_left -> sweep
+        self.row_dir = 1      # +1 = moving right, -1 = moving left (during sweep)
+        self.last_action = None
 
-    def _evaluate(self, order: List[int], dist: List[List[int]]) -> int:
-        cost = 0
-        prev = 0  # start node index
-        for idx in order:
-            cost += dist[prev][idx + 1]
-            prev = idx + 1
-        return cost
+        # Track last movement attempt to detect "bump"
+        self._prev_pos_before_move = None
+        self._prev_move_attempt = None
 
-    # ------------------------------------------------------------------
-    def _a_star_path(
-        self, grid: List[List[int]], start: Tuple[int, int], goal: Tuple[int, int]
-    ) -> List[Callable[[], bool]]:
-        """Return actions for a shortest path between two cells using A*."""
-        if start == goal:
-            return []
+        self.step = 0
 
-        width, height = len(grid[0]), len(grid)
-        moves: List[Tuple[Callable[[], bool], Tuple[int, int]]] = [
-            (self.up, (0, -1)),
-            (self.down, (0, 1)),
-            (self.left, (-1, 0)),
-            (self.right, (1, 0)),
-        ]
+    # ---------- main loop ----------
+    def get_strategy_description(self):
+        return ("Reach a corner (top-left) by going to the nearest walls, "
+                "then traverse the whole grid in a serpentine pattern. "
+                "Clean first, and remember walls when bumps occur.")
 
-        def h(pos: Tuple[int, int]) -> int:
-            return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
-
-        pq: List[Tuple[int, Tuple[int, int], List[Callable[[], bool]]]] = []
-        heapq.heappush(pq, (h(start), start, []))
-        best_g: Dict[Tuple[int, int], int] = {start: 0}
-
-        while pq:
-            f_cost, pos, path = heapq.heappop(pq)
-            g_cost = len(path)
-            if g_cost > best_g.get(pos, float("inf")):
-                continue
-            if pos == goal:
-                return path
-
-            x, y = pos
-            for action, (dx, dy) in moves:
-                nx, ny = x + dx, y + dy
-                if not (0 <= nx < width and 0 <= ny < height):
-                    continue
-                if grid[ny][nx] == -1:  # treat -1 as obstacle if present
-                    continue
-                new_g = g_cost + 1
-                if new_g >= best_g.get((nx, ny), float("inf")):
-                    continue
-                best_g[(nx, ny)] = new_g
-                new_path = path + [action]
-                heapq.heappush(
-                    pq, (new_g + h((nx, ny)), (nx, ny), new_path)
-                )
-        return []
-
-    # ------------------------------------------------------------------
-    def _ga_plan_to_clean(self) -> Optional[List[Callable[[], bool]]]:
-        """Plan a full route to clean all dirt using a GA-based TSP solver."""
-        try:
-            state = self.get_environment_state()
-        except Exception:
-            return None
-        if not state:
-            return None
-
-        grid: List[List[int]] = state.get("grid")
-        start_pos_raw = state.get("agent_position")
-        if grid is None or start_pos_raw is None:
-            return None
-
-        # "agent_position" may be provided as a mutable list coming from JSON.
-        # Convert it to a tuple so it can safely be used as a dictionary key
-        # in the A* search (which stores visited cells in a hash map).
-        start_pos: Tuple[int, int] = tuple(start_pos_raw)
-
-        dirty: List[Tuple[int, int]] = [
-            (x, y)
-            for y, row in enumerate(grid)
-            for x, cell in enumerate(row)
-            if cell == 1
-        ]
-        if not dirty:
-            return []
-
-        # Pre-compute Manhattan distances between all nodes (start + dirt)
-        nodes = [start_pos] + dirty
-        dist = [[0] * len(nodes) for _ in nodes]
-        for i, (x1, y1) in enumerate(nodes):
-            for j, (x2, y2) in enumerate(nodes):
-                dist[i][j] = abs(x1 - x2) + abs(y1 - y2)
-
-        # Genetic algorithm setup
-        population_size = 80
-        generations = 120
-        mutation_rate = 0.2
-        num_targets = len(dirty)
-
-        # Population: permutations of dirt indices
-        population: List[List[int]] = [
-            random.sample(range(num_targets), num_targets)
-            for _ in range(population_size)
-        ]
-        best = min(population, key=lambda o: self._evaluate(o, dist))
-
-        for _ in range(generations):
-            def select() -> List[int]:
-                contenders = random.sample(population, 3)
-                contenders.sort(key=lambda o: self._evaluate(o, dist))
-                return contenders[0]
-
-            new_population: List[List[int]] = []
-            while len(new_population) < population_size:
-                p1, p2 = select(), select()
-                child = self._ordered_crossover(p1, p2)
-                if random.random() < mutation_rate:
-                    self._mutate(child)
-                new_population.append(child)
-            population = new_population
-            best = min(population + [best], key=lambda o: self._evaluate(o, dist))
-
-        # Build path of actions using A*
-        actions: List[Callable[[], bool]] = []
-        current = start_pos
-        for idx in best:
-            goal = dirty[idx]
-            segment = self._a_star_path(grid, current, goal)
-            actions.extend(segment)
-            current = goal
-        return actions
-
-    # ------------------------------------------------------------------
-    def _serpentine_step(self) -> bool:
-        if self.direction == "right":
-            if self.right():
-                return True
-            if self.down():
-                self.direction = "left"
-                return True
-            return self.idle()
-        if self.left():
-            return True
-        if self.down():
-            self.direction = "right"
-            return True
-        return self.idle()
-
-    # ------------------------------------------------------------------
-    def think(self) -> bool:
+    def think(self):
         if not self.is_connected():
             return False
 
-        perception = self.get_perception()
-        if not perception or perception.get("is_finished", True):
+        p = self.get_perception()
+        if not p or p.get("is_finished", True):
             return False
 
-        if perception.get("is_dirty", False):
-            return self.suck()
+        pos = p.get("position", None)
+        is_dirty = p.get("is_dirty", False)
+        if isinstance(pos, (tuple, list)) and len(pos) == 2:
+            pos = (int(pos[0]), int(pos[1]))
+            self.visited.add(pos)
+            self.visit_counts[pos] += 1
+            self.history.append(pos)
 
-        if self.current_path:
-            action = self.current_path.pop(0)
-            return action()
+        self.step += 1
+        self._update_blocked_from_last_attempt(current_pos=pos)
 
-        if self.use_global:
-            path = self._ga_plan_to_clean()
-            if path is None:
-                self.use_global = False
-            elif not path:
-                return self.idle()
-            else:
-                self.current_path = path
-                action = self.current_path.pop(0)
-                return action()
+        if self.debug:
+            print(f"\n[STEP {self.step}] mode={self.mode} pos={pos} dirty={is_dirty}")
+            if pos in self.blocked and self.blocked[pos]:
+                bl = ", ".join(self._move_name(m) for m in self.blocked[pos])
+                print(f"[WALLS] From {pos} blocked: {{{bl}}}")
 
-        return self._serpentine_step()
+        # Clean first
+        if is_dirty:
+            if self.debug: print("[DECISION] Dirty -> suck()")
+            self._clear_prev_move_attempt()
+            ok = self.suck()
+            if self.debug: print(f"[ACTION] suck() -> {ok}")
+            self.last_action = None
+            return ok
 
+        # Control-state behavior
+        if self.mode == "go_top":
+            # If UP is blocked here, we're at the top; switch to go_left
+            if self._is_blocked_here(pos, self.up):
+                if self.debug: print("[MODE] Reached top wall -> go_left")
+                self.mode = "go_left"
+                return self._idle_or_progress()
+            return self._attempt_move(pos, self.up)
 
-# ----------------------------------------------------------------------
-def run_agent_simulation(
-    size_x: int = 8,
-    size_y: int = 8,
-    dirt_rate: float = 0.3,
-    server_url: str = "http://localhost:5000",
-    verbose: bool = True,
-) -> int:
-    agent = StudentChatGPTAgent(server_url)
-    try:
-        if not agent.connect_to_environment(size_x, size_y, dirt_rate):
-            return 0
-        performance = agent.run_simulation(verbose)
-        return performance
-    finally:
-        agent.disconnect()
+        elif self.mode == "go_left":
+            if self._is_blocked_here(pos, self.left):
+                if self.debug: print("[MODE] Reached left wall -> sweep mode")
+                self.mode = "sweep"
+                self.row_dir = 1  # start sweeping to the right
+                return self._idle_or_progress()
+            return self._attempt_move(pos, self.left)
+
+        elif self.mode == "sweep":
+            # Determine horizontal direction function
+            horiz = self.right if self.row_dir == 1 else self.left
+            # 1) Try to continue horizontally
+            if not self._is_blocked_here(pos, horiz):
+                return self._attempt_move(pos, horiz)
+            # 2) If horizontal blocked, try to go DOWN one row
+            if not self._is_blocked_here(pos, self.down):
+                # Flip row direction after moving down
+                moved = self._attempt_move(pos, self.down)
+                if moved:
+                    self.row_dir *= -1
+                return moved
+            # 3) Nowhere to go (bottom reached and at wall) -> done; idle
+            if self.debug: print("[MODE] Sweep complete or stuck at bottom/corner -> idle()")
+            self._clear_prev_move_attempt()
+            return self.idle()
+
+        # Fallback
+        if self.debug: print("[MODE] Unknown mode; idling")
+        self._clear_prev_move_attempt()
+        return self.idle()
+
+    # ---------- move & wall learning ----------
+    def _attempt_move(self, pos, move_fn):
+        """Try a move, learn immediate failure as wall if move() returns False."""
+        self._prev_pos_before_move = pos
+        self._prev_move_attempt = move_fn
+        ok = move_fn()
+        if self.debug:
+            print(f"[ACTION] {self._move_name(move_fn)}() -> {ok}")
+        self.last_action = move_fn
+
+        # Immediate failure: learn wall now
+        if ok is False and pos is not None:
+            if self.debug:
+                print(f"[WALL-LEARNED] Immediate failure for {self._move_name(move_fn)} from {pos}")
+            self._mark_blocked(pos, move_fn)
+            self._clear_prev_move_attempt()
+        return ok
+
+    def _update_blocked_from_last_attempt(self, current_pos):
+        """If last step tried to move but pos didn't change, mark that direction as blocked."""
+        if self._prev_pos_before_move is None or self._prev_move_attempt is None:
+            return
+        if current_pos == self._prev_pos_before_move:
+            if self.debug:
+                print(f"[WALL-LEARNED] Stayed at {current_pos} after trying "
+                      f"{self._move_name(self._prev_move_attempt)} -> marking wall")
+            self._mark_blocked(self._prev_pos_before_move, self._prev_move_attempt)
+        self._clear_prev_move_attempt()
+
+    def _mark_blocked(self, origin_pos, move_fn):
+        self.blocked[origin_pos].add(move_fn)
+        dx, dy = self.delta_map[move_fn]
+        neighbor = (origin_pos[0] + dx, origin_pos[1] + dy)
+        opp = self._opposite_of(move_fn)
+        if opp:
+            self.blocked[neighbor].add(opp)
+        if self.debug:
+            print(f"[WALL-MARK] From {origin_pos} block {self._move_name(move_fn)} "
+                  f"(and from {neighbor} block {self._move_name(opp) if opp else 'None'})")
+
+    def _is_blocked_here(self, pos, move_fn):
+        if pos is None:  # play it safe
+            return False
+        return move_fn in self.blocked.get(pos, set())
+
+    def _clear_prev_move_attempt(self):
+        self._prev_pos_before_move = None
+        self._prev_move_attempt = None
+
+    # ---------- utilities ----------
+    def _opposite_of(self, move_fn):
+        if move_fn == self.up:    return self.down
+        if move_fn == self.down:  return self.up
+        if move_fn == self.left:  return self.right
+        if move_fn == self.right: return self.left
+        return None
+
+    def _move_name(self, move_fn):
+        if move_fn == self.up: return "up"
+        if move_fn == self.down: return "down"
+        if move_fn == self.left: return "left"
+        if move_fn == self.right: return "right"
+        return "?"
+
+    def _idle_or_progress(self):
+        """Small helper so mode switches still 'do something' in the same step if no dirt."""
+        return self.idle()
 
 
 if __name__ == "__main__":
-    performance = run_agent_simulation(verbose=True)
+    # Run directly, or via repo's run_agent.py
+    agent = WallSweepAgent(enable_ui=True, live_stats=True, debug=True)
+    if agent.connect_to_environment(sizeX=8, sizeY=8, dirt_rate=0.3):
+        perf = agent.run_simulation(verbose=True)
+        print(f"Final performance: {perf}")
+        agent.disconnect()
