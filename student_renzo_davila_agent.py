@@ -37,6 +37,8 @@ class ExampleAgent(BaseAgent):
         self.reach_side = False
         self.reach_corner = False
         self.change_side = True
+        self.size = -1
+        self.alredy_up = False
     
     def get_strategy_description(self) -> str:
         return "Clean if dirty, move in circular pattern when clean"
@@ -56,8 +58,12 @@ class ExampleAgent(BaseAgent):
         if not perception or perception.get('is_finished', True):
             return False
 
+        print(self.size)
+        print(perception.get('position'))
+
         if perception.get('is_dirty', False):
             return self.suck()
+        
 
         if not self.reach_side and perception.get('position') != self.last_position:
             self.last_position = perception.get('position')
@@ -72,20 +78,37 @@ class ExampleAgent(BaseAgent):
             return self.down()
         elif not self.reach_corner and perception.get('position') == self.last_position:
             self.reach_corner = True
-            self.last_position = (0,0)
+            self.last_position = (-1,-1)
             return self.suck()
 
         if self.reach_corner:
 
-            if self.change_side and perception.get('position') != self.last_position:
-               self.last_position = perception.get('position')
-               return self.right()
-            elif not self.change_side and perception.get('position') != self.last_position:
-               self.last_position = perception.get('position')
-               return self.left()
-            else:
+            print(perception.get('position')[0])
+
+            if self.size == perception.get('position')[0]:
                 self.change_side = not self.change_side
+                if not self.alredy_up:
+                    self.alredy_up = not self.alredy_up
+                    self.change_side = not self.change_side
+                    self.last_position = perception.get('position')
+                    return self.up() 
+            elif self.size != -1 and perception.get('position')[0] == 0:
+                if self.alredy_up:
+                    self.alredy_up = not self.alredy_up
+                    self.change_side = not self.change_side
+                    self.last_position = perception.get('position')
+                    return self.up()
+            
+
+            if self.change_side and self.last_position != perception.get('position'):
                 self.last_position = perception.get('position')
+                return self.right()
+            elif not self.change_side:
+                self.last_position = perception.get('position')
+                return self.left()
+            else:
+                self.size = perception.get('position')[0]
+                self.alredy_up = not self.alredy_up
                 return self.up()
 
     
