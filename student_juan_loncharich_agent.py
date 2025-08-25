@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base_agent import BaseAgent
 
 
-class StudentChatGPTAgent(BaseAgent):
+class CompetitiveAgent(BaseAgent):
     """Agent that uses A* to find the nearest dirt when global state is available.
 
     If the global state cannot be retrieved, the agent performs a serpentine
@@ -27,7 +27,7 @@ class StudentChatGPTAgent(BaseAgent):
     ) -> None:
         super().__init__(
             server_url,
-            "StudentChatGPTAgent",
+            "CompetitiveAgent",
             enable_ui,
             record_game,
             replay_file,
@@ -182,7 +182,7 @@ def run_agent_simulation(
     server_url: str = "http://localhost:5000",
     verbose: bool = True,
 ) -> int:
-    agent = StudentChatGPTAgent(server_url)
+    agent = CompetitiveAgent(server_url)
     try:
         if not agent.connect_to_environment(size_x, size_y, dirt_rate):
             return 0
@@ -193,7 +193,7 @@ def run_agent_simulation(
 
 
 if __name__ == "__main__":
-    print("StudentChatGPTAgent using A* search")
+    print("CompetitiveAgent using A* search")
     print("Ensure the environment server is running on localhost:5000")
     performance = run_agent_simulation(verbose=True)
     print(f"\nFinal performance: {performance}")
