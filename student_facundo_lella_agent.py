@@ -55,6 +55,9 @@ class ExampleAgent(BaseAgent):
         if not perception or perception.get('is_finished', True):
             return False
         
+        if perception.get('is_dirty',False):
+                return self.suck()
+        
         pos = perception.get('position')
 
         if self.star_serpent == False:
@@ -71,9 +74,6 @@ class ExampleAgent(BaseAgent):
                     self.star_serpent=True
                     self.current_move_index = 3
         else:
-            if perception.get('is_dirty',False):
-                return self.suck()
-            
             if self.reach_side==True:
 
                 if pos==self.last_position:
